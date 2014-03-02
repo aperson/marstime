@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
 import math
-import json
-import urllib.request
 import time
 import re
 import signal
 import sys
-from urllib.parse import urlencode
-import http.cookiejar
+import praw
+from praw.handlers import MultiprocessHandler
 
 try:
-    from credentials import * # NOQA
+    from credentials import *  # NOQA
 except ImportError:
     USERNAME = 'someusername'
     PASSWORD = 'somepassword'
     SUBREDDIT = 'somesubreddit'
     SIDEBAR_TAGS = {'start': '[](#edit_start)', 'stop': '[](#edit_stop)'}
 
+
 def sigint_handler(signal, frame):
     '''Handles ^c'''
     print('Recieved SIGINT! Exiting...')
     sys.exit(0)
 
+
 def cos(deg):
     return math.cos(deg * math.pi / 180)
 
+
 def sin(deg):
     return math.sin(deg * math.pi / 180)
+
 
 def h_to_hms(h):
     x = h * 3600
@@ -51,6 +53,7 @@ def within_24(n):
     elif n >= 24:
         n -= 24
     return n
+
 
 class Mars(object):
     def __init__(self):
@@ -114,69 +117,26 @@ class Mars(object):
         return h_to_hm(self.curiosity_ltst)
 
 
-class Reddit(object):
-    """Base class to perform the tasks of a redditor."""
-
-    def __init__(self, username, password):
-        self.username = username
-        self.password = password
-        self.cj = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cj))
-        self.opener.addheaders = [('User-agent', '/r/curiosityrover sidebar updater')]
-        self._login()
-
-    def _request(self, url, body=None):
-        if body is not None:
-            body = urlencode(body).encode('utf-8')
-        try:
-            with self.opener.open(url, data=body) as w:
-                time.sleep(2)
-                return json.loads(w.read().decode('utf-8'))
-        except urllib.error.HTTPError:
-            # This should at least help for times when reddit derps up when we request a listing
-            return dict()
-
-    def _login(self):
-        body = {'user': self.username, 'passwd': self.password, 'api_type': 'json'}
-        resp = self._request('http://www.reddit.com/api/login', body)
-        self.modhash = resp['json']['data']['modhash']
-
-    def post(self, url, body):
-        """Sends a POST to the url and returns the json as a dict."""
-
-        if 'api_type' not in body:
-            body['api_type'] = 'json'
-
-        body['uh'] = self.modhash
-
-        return self._request(url, body)
-
-    def get(self, url):
-        """Sends a GET to the url and returns the json as a dict."""
-        if '.json' not in url:
-            url += '.json'
-        return self._request(url)
-
-    def sidebar(self, subreddit, text, section):
-        """Edits the sidebar in subreddit in-between the allowed tags set by section['start'] and
-        section['stop']"""
-        sub = self.get(
-            'http://www.reddit.com/r/{}/wiki/config/sidebar.json'.format(subreddit))['data']
-        regex = r'''{}.*?{}'''.format(re.escape(section['start']), re.escape(section['stop']))
-        text = section['start'] + text + section['stop']
-        to_replace = (('&amp;', '&'), ('&gt;', '>'), ('&lt;', '<'))
-        for i in to_replace:
-            sub['content_md'] = sub['content_md'].replace(*i)
-        replace = re.findall(regex, sub['content_md'], re.DOTALL)[0]
-        sidebar = sub['content_md'].replace(replace, text)
-        body = {'content': sidebar, 'page': 'config/sidebar', 'reason': 'automated edit {}'.format(
-            time.time())}
-        self.post('http://www.reddit.com/r/{}/api/wiki/edit'.format(subreddit), body)
+def update_sidebar(subreddit, text, section):
+    """Edits the sidebar in subreddit in-between the allowed tags set by section['start'] and
+    section['stop']"""
+    sidebar = subreddit.get_wiki_page('config/sidebar')
+    sidebar_text = sidebar.content_md
+    regex = r'''{}.*?{}'''.format(re.escape(section['start']), re.escape(section['stop']))
+    text = section['start'] + text + section['stop']
+    to_replace = (('&amp;', '&'), ('&gt;', '>'), ('&lt;', '<'))
+    for i in to_replace:
+        sidebar_text = sidebar_text.replace(*i)
+    replace = re.findall(regex, sidebar_text, re.DOTALL)[0]
+    sidebar_text = sidebar_text.replace(replace, text)
+    sidebar.edit(content=sidebar_text, reason='automated edit {}'.format(time.time()))
 
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, sigint_handler)
-    r = Reddit(USERNAME, PASSWORD)
+    r = praw.Reddit("/r/{}'s sidebar updater".format(SUBREDDIT), handler=MultiprocessHandler())
+    r.login(USERNAME, PASSWORD)
+    subreddit = r.get_subreddit(SUBREDDIT)
     last_status = None
     sidebar_template = (
         """\n\n1. **Current Mars Sol Date**: {mars_sol}"""
@@ -195,10 +155,9 @@ if __name__ == '__main__':
         if last_status:
             if status != last_status:
                 print('Updating sidebar')
-                r.sidebar(SUBREDDIT, status, SIDEBAR_TAGS)
+                update_sidebar(SUBREDDIT, status, SIDEBAR_TAGS)
         elif last_status is None:
             print('Updating sidebar')
-            r.sidebar(SUBREDDIT, status, SIDEBAR_TAGS)
+            update_sidebar(SUBREDDIT, status, SIDEBAR_TAGS)
         last_status = status
         time.sleep(30)
-
