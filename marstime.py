@@ -155,9 +155,9 @@ if __name__ == '__main__':
         if last_status:
             if status != last_status:
                 print('Updating sidebar')
-                update_sidebar(SUBREDDIT, status, SIDEBAR_TAGS)
+                update_sidebar(subreddit, status, SIDEBAR_TAGS)
         elif last_status is None:
             print('Updating sidebar')
-            update_sidebar(SUBREDDIT, status, SIDEBAR_TAGS)
+            update_sidebar(subreddit, status, SIDEBAR_TAGS)
         last_status = status
         time.sleep(30)
